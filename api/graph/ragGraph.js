@@ -21,7 +21,7 @@ graph.addEdge("crm", END);
 export const ragAgent = graph.compile();
 
 export async function runRagPipeline(question) {
-  const result = await graph.invoke({ question });
+  const result = await ragAgent.invoke({ question });
   return {
     answer: result.answer,
     sources: result.sources,
