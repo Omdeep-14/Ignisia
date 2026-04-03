@@ -10,6 +10,9 @@ export function conflictNode(state) {
       // Skip chunks from the same source
       if (a.metadata.source === b.metadata.source) continue;
 
+      // Skip cross-type comparisons — excel vs pdf are unlikely real conflicts
+      if (a.metadata.type !== b.metadata.type) continue;
+
       // Check for numeric/price contradictions
       const priceRe = /\$?[\d,]+\.?\d*\s*(USD|INR|GBP|EUR|%)?/gi;
       const pricesA = new Set(

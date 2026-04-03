@@ -10,7 +10,7 @@ export async function retrieveNode(state) {
 
   const results = await vectorStore.similaritySearchWithScore(
     state.question,
-    5,
+    10,
   );
 
   const chunks = results.map(([doc, score]) => ({

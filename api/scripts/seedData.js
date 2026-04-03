@@ -1,33 +1,39 @@
-import "dotenv/config";
-import { supabase } from "../config/config.js";
-import { ingestFromBucket } from "../ingestion/ingestPipeline.js";
 import fs from "fs";
 import path from "path";
+import { parsePDF } from "../ingestion/pdfParser.js";
+import { parseExcel } from "../ingestion/excelParser.js";
+import { parseEmail } from "../ingestion/emailParser.js";
+import { ingestChunks } from "../ingestion/ingestPipeline.js";
 
-const DATA_DIR = "./data";
-const BUCKET = process.env.SUPABASE_BUCKET;
-
-const files = fs
-  .readdirSync(DATA_DIR, { recursive: true })
-  .filter((f) => [".pdf", ".xlsx", ".eml", ".txt"].includes(path.extname(f)));
+const dataDir = "./data";
+const files = fs.readdirSync(dataDir, { recursive: true });
 
 for (const file of files) {
-  const localPath = path.join(DATA_DIR, file);
-  const bucketPath = `uploads/${path.basename(file)}`;
+  const filePath = path.join(dataDir, file);
+  const ext = path.extname(file).toLowerCase();
+  let chunks = [];
 
-  // Upload to Supabase bucket
-  const { error: uploadError } = await supabase.storage
-    .from(BUCKET)
-    .upload(bucketPath, fs.readFileSync(localPath), { upsert: true });
+  try {
+    if (ext === ".pdf") {
+      chunks = await parsePDF(filePath);
+    } else if (ext === ".xlsx" || ext === ".xls") {
+      chunks = await parseExcel(filePath);
+    } else if (ext === ".eml" || ext === ".txt") {
+      chunks = await parseEmail(filePath);
+    } else {
+      continue;
+    }
 
-  if (uploadError) {
-    console.error(`Upload failed for ${file}:`, uploadError.message);
-    continue;
+    if (chunks.length === 0) {
+      console.log(`⚠️  ${file}: no chunks extracted, skipping`);
+      continue;
+    }
+
+    await ingestChunks(chunks, file);
+    console.log(`✅ ${file}: ${chunks.length} chunks stored`);
+  } catch (err) {
+    console.error(`❌ ${file}: ${err.message}`);
   }
-
-  // Ingest from bucket into pgvector
-  await ingestFromBucket(bucketPath);
-  console.log(`Done: ${file}`);
 }
 
 console.log("All files seeded.");
