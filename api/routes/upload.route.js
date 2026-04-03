@@ -2,6 +2,7 @@ import express from "express";
 import multer from "multer";
 import { ingestFromBucket } from "../ingestion/ingestPipeline.js";
 import { supabase } from "../config/config.js";
+import { requireAuth } from "./rooms.route.js";
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -38,6 +39,34 @@ router.post("/upload", upload.single("file"), async (req, res) => {
     });
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/uploads/list ──────────────────────────────────────────────────
+router.get("/uploads/list", requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase.storage
+      .from(process.env.SUPABASE_BUCKET)
+      .list("uploads", { limit: 100, sortBy: { column: "created_at", order: "desc" } });
+
+    if (error) throw new Error(error.message);
+
+    const files = (data ?? []).map((f) => {
+      const { data: urlData } = supabase.storage
+        .from(process.env.SUPABASE_BUCKET)
+        .getPublicUrl(`uploads/${f.name}`);
+      return {
+        name: f.name.replace(/^\d+_/, ""), // strip timestamp prefix
+        path: `uploads/${f.name}`,
+        size: f.metadata?.size ?? 0,
+        created_at: f.created_at,
+        url: urlData.publicUrl,
+      };
+    });
+
+    res.json({ files });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

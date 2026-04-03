@@ -150,6 +150,9 @@ router.post("/:id/ask", requireAuth, async (req, res) => {
   if (!room)
     return res.status(404).json({ error: "Room not found or inactive" });
 
+  const isAiTriggered = question.trim().toLowerCase().startsWith("@ai ");
+  const processedQuestion = isAiTriggered ? question.trim().substring(4).trim() : question.trim();
+
   // insert pending message immediately — triggers Realtime for all members
   const { data: message, error: insertError } = await supabase
     .from("room_messages")
@@ -157,8 +160,8 @@ router.post("/:id/ask", requireAuth, async (req, res) => {
       room_id: id,
       user_id: req.user.id,
       display_name: req.user.display_name,
-      question: question.trim(),
-      is_pending: true,
+      question: question.trim(), // Keep original text for the chat history
+      is_pending: isAiTriggered,
     })
     .select()
     .single();
@@ -168,29 +171,31 @@ router.post("/:id/ask", requireAuth, async (req, res) => {
   // respond immediately so the client isn't waiting
   res.json({ message_id: message.id });
 
-  // run RAG pipeline in background
-  try {
-    const result = await runRagPipeline(question.trim());
+  if (isAiTriggered) {
+    // run RAG pipeline in background
+    try {
+      const result = await runRagPipeline(processedQuestion);
 
-    await supabase
-      .from("room_messages")
-      .update({
-        answer: result.answer,
-        sources: result.sources ?? [],
-        conflicts: result.conflicts ?? [],
-        timeline: result.timeline ?? [],
-        is_pending: false,
-      })
-      .eq("id", message.id);
-  } catch (err) {
-    console.error("RAG pipeline error:", err);
-    await supabase
-      .from("room_messages")
-      .update({
-        answer: "Something went wrong while generating an answer.",
-        is_pending: false,
-      })
-      .eq("id", message.id);
+      await supabase
+        .from("room_messages")
+        .update({
+          answer: result.answer,
+          sources: result.sources ?? [],
+          conflicts: result.conflicts ?? [],
+          timeline: result.timeline ?? [],
+          is_pending: false,
+        })
+        .eq("id", message.id);
+    } catch (err) {
+      console.error("RAG pipeline error:", err);
+      await supabase
+        .from("room_messages")
+        .update({
+          answer: "Something went wrong while generating an answer.",
+          is_pending: false,
+        })
+        .eq("id", message.id);
+    }
   }
 });
 
