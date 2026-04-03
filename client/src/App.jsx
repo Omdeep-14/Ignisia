@@ -314,8 +314,11 @@ function Sidebar({ onSuggest }) {
         </p>
       </div>
 
+      {/* Upload */}
+      <UploadPanel />
+
       {/* Suggested questions */}
-      <div className="px-4 py-4 flex-1">
+      <div className="px-4 py-4 flex-1 overflow-y-auto">
         <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">
           Suggested
         </p>
@@ -436,6 +439,130 @@ export default function App() {
 
         <ChatInput onSend={sendMessage} loading={loading} />
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// FILE: src/components/UploadPanel.jsx
+// File upload panel shown in the sidebar
+// ============================================================
+function UploadPanel({ onUploadComplete }) {
+  const [dragging, setDragging] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const inputRef = useRef(null);
+
+  async function uploadFile(file) {
+    setUploading(true);
+    setResult(null);
+    setError(null);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await fetch("http://localhost:5000/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setResult(data);
+      onUploadComplete?.(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    setDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) uploadFile(file);
+  }
+
+  function handleChange(e) {
+    const file = e.target.files[0];
+    if (file) uploadFile(file);
+  }
+
+  return (
+    <div className="px-4 py-4 border-t border-gray-200">
+      <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">
+        Upload Document
+      </p>
+
+      {/* Drop zone */}
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        onClick={() => inputRef.current?.click()}
+        className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-colors ${
+          dragging
+            ? "border-indigo-400 bg-indigo-50"
+            : "border-gray-200 hover:border-indigo-300 hover:bg-gray-50"
+        }`}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".pdf,.xlsx,.xls,.eml,.txt"
+          className="hidden"
+          onChange={handleChange}
+        />
+
+        {uploading ? (
+          <div className="flex flex-col items-center gap-2">
+            <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+            <p className="text-xs text-indigo-600">Uploading & ingesting...</p>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-1">
+            <svg
+              className="w-6 h-6 text-gray-400"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+              />
+            </svg>
+            <p className="text-xs text-gray-500">
+              Drop file or click to upload
+            </p>
+            <p className="text-xs text-gray-400">PDF, Excel, Email</p>
+          </div>
+        )}
+      </div>
+
+      {/* Success */}
+      {result && (
+        <div className="mt-2 p-2 rounded-lg bg-green-50 border border-green-100">
+          <p className="text-xs text-green-700 font-medium">✓ {result.file}</p>
+          <p className="text-xs text-green-600">
+            {result.chunks} chunks ingested
+          </p>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div className="mt-2 p-2 rounded-lg bg-red-50 border border-red-100">
+          <p className="text-xs text-red-600">{error}</p>
+        </div>
+      )}
     </div>
   );
 }
