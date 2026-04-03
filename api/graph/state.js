@@ -11,6 +11,10 @@ export const defaultState = {
     value: (x, y) => y ?? x,
     default: () => [],
   },
+  timeline: {
+    value: (x, y) => y ?? x,
+    default: () => [],
+  },
   answer: {
     value: (x, y) => y ?? x,
     default: () => "",

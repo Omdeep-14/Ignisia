@@ -42,7 +42,6 @@ router.post("/create", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Room name is required" });
   }
 
-  // generate unique code
   let code, existing;
   do {
     const { data } = await supabase.rpc("generate_room_code");
@@ -109,7 +108,6 @@ router.get("/", requireAuth, async (req, res) => {
 router.get("/:id/messages", requireAuth, async (req, res) => {
   const { id } = req.params;
 
-  // verify room belongs to user's org
   const { data: room } = await supabase
     .from("rooms")
     .select("id")
@@ -138,7 +136,7 @@ router.post("/:id/ask", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Question is required" });
   }
 
-  // verify room belongs to user's org
+  // Verify room belongs to user's org
   const { data: room } = await supabase
     .from("rooms")
     .select("id")
@@ -151,16 +149,18 @@ router.post("/:id/ask", requireAuth, async (req, res) => {
     return res.status(404).json({ error: "Room not found or inactive" });
 
   const isAiTriggered = question.trim().toLowerCase().startsWith("@ai ");
-  const processedQuestion = isAiTriggered ? question.trim().substring(4).trim() : question.trim();
+  const processedQuestion = isAiTriggered
+    ? question.trim().substring(4).trim()
+    : question.trim();
 
-  // insert pending message immediately — triggers Realtime for all members
+  // Insert pending message immediately — triggers Realtime for all members
   const { data: message, error: insertError } = await supabase
     .from("room_messages")
     .insert({
       room_id: id,
       user_id: req.user.id,
       display_name: req.user.display_name,
-      question: question.trim(), // Keep original text for the chat history
+      question: question.trim(),
       is_pending: isAiTriggered,
     })
     .select()
@@ -168,34 +168,54 @@ router.post("/:id/ask", requireAuth, async (req, res) => {
 
   if (insertError) return res.status(500).json({ error: insertError.message });
 
-  // respond immediately so the client isn't waiting
+  // Respond immediately — don't make client wait for RAG
   res.json({ message_id: message.id });
 
+  // Run RAG pipeline fully detached from the request/response lifecycle
   if (isAiTriggered) {
-    // run RAG pipeline in background
-    try {
-      const result = await runRagPipeline(processedQuestion);
+    setImmediate(async () => {
+      console.log(
+        `[ask] RAG started for message ${message.id}: "${processedQuestion}"`,
+      );
 
-      await supabase
-        .from("room_messages")
-        .update({
-          answer: result.answer,
-          sources: result.sources ?? [],
-          conflicts: result.conflicts ?? [],
-          timeline: result.timeline ?? [],
-          is_pending: false,
-        })
-        .eq("id", message.id);
-    } catch (err) {
-      console.error("RAG pipeline error:", err);
-      await supabase
-        .from("room_messages")
-        .update({
-          answer: "Something went wrong while generating an answer.",
-          is_pending: false,
-        })
-        .eq("id", message.id);
-    }
+      try {
+        const result = await runRagPipeline(processedQuestion);
+        console.log(`[ask] RAG complete for message ${message.id}`);
+
+        const { error: updateError } = await supabase
+          .from("room_messages")
+          .update({
+            answer: result.answer,
+            sources: result.sources ?? [],
+            conflicts: result.conflicts ?? [],
+            timeline: result.timeline ?? [],
+            is_pending: false,
+          })
+          .eq("id", message.id);
+
+        if (updateError) {
+          console.error(
+            `[ask] Supabase update failed for message ${message.id}:`,
+            updateError.message,
+          );
+        } else {
+          console.log(`[ask] Message ${message.id} updated successfully`);
+        }
+      } catch (err) {
+        console.error(
+          `[ask] RAG pipeline error for message ${message.id}:`,
+          err.message,
+        );
+
+        await supabase
+          .from("room_messages")
+          .update({
+            answer: "Something went wrong while generating an answer.",
+            is_pending: false,
+          })
+          .eq("id", message.id);
+      }
+    });
   }
 });
 
