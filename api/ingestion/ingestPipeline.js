@@ -1,5 +1,5 @@
-import { supabase, embeddings } from "../config/config.js";
-import { SupabaseVectorStore } from "@langchain/community/vectorstores/supabase";
+import { embeddings, getVectorCollection } from "../config/config.js";
+import { MongoDBAtlasVectorSearch } from "@langchain/mongodb";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { Document } from "@langchain/core/documents";
 import { parsePDF } from "./pdfParser.js";
@@ -22,7 +22,6 @@ const splitter = new RecursiveCharacterTextSplitter({
   chunkOverlap: 50,
 });
 
-// ─── helper: turn raw parser chunks → LangChain Documents ───────────────────
 async function buildDocuments(rawChunks, extraMeta = {}) {
   const documents = [];
 
@@ -39,7 +38,6 @@ async function buildDocuments(rawChunks, extraMeta = {}) {
       ...extraMeta,
     };
 
-    // Excel rows and emails are atomic — never split them further
     if (chunk.type === "excel" || chunk.type === "email") {
       documents.push(
         new Document({
@@ -48,7 +46,6 @@ async function buildDocuments(rawChunks, extraMeta = {}) {
         }),
       );
     } else {
-      // PDFs get split into smaller overlapping chunks
       const subDocs = await splitter.createDocuments([chunk.text], [metadata]);
       documents.push(...subDocs);
     }
@@ -57,54 +54,40 @@ async function buildDocuments(rawChunks, extraMeta = {}) {
   return documents;
 }
 
-// ─── helper: embed + store in Supabase ──────────────────────────────────────
 async function storeDocuments(documents) {
-  await SupabaseVectorStore.fromDocuments(documents, embeddings, {
-    client: supabase,
-    tableName: "documents",
-    queryName: "match_documents",
+  const collection = getVectorCollection();
+  await MongoDBAtlasVectorSearch.fromDocuments(documents, embeddings, {
+    collection,
+    indexName: "vector_index", // Must match the index name in Atlas
+    textKey: "text",
+    embeddingKey: "embedding",
   });
 }
 
-// ─── ingestFromBucket: used by API upload route ──────────────────────────────
-export async function ingestFromBucket(bucketFilePath) {
-  const { data, error } = await supabase.storage
-    .from(process.env.SUPABASE_BUCKET)
-    .download(bucketFilePath);
-
-  if (error) throw new Error(`Bucket download failed: ${error.message}`);
-
-  const fileName = path.basename(bucketFilePath);
-  const ext = path.extname(fileName).toLowerCase();
+// ─── ingestFromBuffer: used by API upload route ──────────────────────────────
+export async function ingestFromBuffer(buffer, originalname, cloudUrl, orgId) {
+  const ext = path.extname(originalname).toLowerCase();
   const parser = PARSERS[ext];
   if (!parser) throw new Error(`No parser for extension: ${ext}`);
 
-  const tmpPath = path.join(os.tmpdir(), fileName);
-  const arrayBuffer = await data.arrayBuffer();
-  writeFileSync(tmpPath, Buffer.from(arrayBuffer));
+  const tmpPath = path.join(os.tmpdir(), `${Date.now()}_${originalname}`);
+  writeFileSync(tmpPath, buffer);
 
   const rawChunks = await parser(tmpPath);
-  unlinkSync(tmpPath);
+  unlinkSync(tmpPath); // cleanup temp file
 
   const documents = await buildDocuments(rawChunks, {
-    bucketPath: bucketFilePath,
+    url: cloudUrl,
+    filename: originalname,
+    org_id: orgId
   });
   await storeDocuments(documents);
 
-  console.log(`[ingest] ${fileName}: ${documents.length} chunks stored`);
+  console.log(`[ingest] ${originalname}: ${documents.length} chunks stored`);
   return documents.length;
 }
 
-// ─── ingestChunks: used by seedData.js for local files ───────────────────────
-export async function ingestChunks(rawChunks, fileName) {
-  const documents = await buildDocuments(rawChunks);
-  await storeDocuments(documents);
-
-  console.log(`[ingest] ${fileName}: ${documents.length} chunks stored`);
-  return documents.length;
-}
-
-// ─── ingestLocalFile: convenience wrapper for a single local file path ───────
+// ─── ingestLocalFile: convenience wrapper for local files ─────────────────────
 export async function ingestLocalFile(filePath) {
   const fileName = path.basename(filePath);
   const ext = path.extname(fileName).toLowerCase();

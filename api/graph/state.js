@@ -11,10 +11,6 @@ export const defaultState = {
     value: (x, y) => y ?? x,
     default: () => [],
   },
-  timeline: {
-    value: (x, y) => y ?? x,
-    default: () => [],
-  },
   answer: {
     value: (x, y) => y ?? x,
     default: () => "",
@@ -26,5 +22,13 @@ export const defaultState = {
   crmTicket: {
     value: (x, y) => y ?? x,
     default: () => null,
+  },
+  org_id: {
+    value: (x, y) => y ?? x,
+    default: () => null,
+  },
+  messages: {
+    value: (x, y) => [...(x || []), ...(y || [])],
+    default: () => [],
   },
 };

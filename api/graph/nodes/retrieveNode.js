@@ -1,16 +1,20 @@
-import { SupabaseVectorStore } from "@langchain/community/vectorstores/supabase";
-import { supabase, embeddings } from "../../config/config.js";
+import { MongoDBAtlasVectorSearch } from "@langchain/mongodb";
+import { embeddings, getVectorCollection } from "../../config/config.js";
 
 export async function retrieveNode(state) {
-  const vectorStore = new SupabaseVectorStore(embeddings, {
-    client: supabase,
-    tableName: "documents",
-    queryName: "match_documents",
+  const collection = getVectorCollection();
+  
+  const vectorStore = new MongoDBAtlasVectorSearch(embeddings, {
+    collection,
+    indexName: "vector_index", 
+    textKey: "text",
+    embeddingKey: "embedding",
   });
 
+  // Number of results to fetch: Massive bump to 100 to encompass all chunks from all files natively
   const results = await vectorStore.similaritySearchWithScore(
     state.question,
-    10,
+    60
   );
 
   const chunks = results.map(([doc, score]) => ({

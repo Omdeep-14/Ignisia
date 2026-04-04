@@ -1,29 +1,25 @@
 import express from "express";
-import { ragAgent } from "../graph/ragGraph.js";
+import { runRagPipeline } from "../graph/ragGraph.js";
+import { requireAuth } from "./rooms.route.js";
 
 const router = express.Router();
 
-router.post("/chat", async (req, res) => {
+router.post("/chat", requireAuth, async (req, res) => {
   try {
     const { question } = req.body;
-    if (!question?.trim()) {
+    if (!question)
       return res.status(400).json({ error: "question is required" });
-    }
 
-    console.log(`[chat] question: "${question}"`);
-
-    const finalState = await ragAgent.invoke({ question: question.trim() });
-
-    console.log(`[chat] done`);
+    const finalState = await runRagPipeline(question, "solo-" + (req.user?.id || "guest"), req.user?.org_id);
 
     res.json({
       answer: finalState.answer,
-      sources: finalState.sources ?? [],
+      sources: finalState.sources,
       conflicts: finalState.conflicts?.map((c) => c.explanation) ?? [],
-      timeline: finalState.timeline ?? [],
+      crmTicket: finalState.crmTicket ?? null,
     });
   } catch (err) {
-    console.error("[chat] error:", err.message);
+    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -1,13 +1,14 @@
 import express from "express";
 import multer from "multer";
-import { ingestFromBucket } from "../ingestion/ingestPipeline.js";
-import { supabase } from "../config/config.js";
+import { ingestFromBuffer } from "../ingestion/ingestPipeline.js";
+import { cloudinary } from "../config/config.js";
+import { requireAuth } from "./rooms.route.js";
+import streamifier from "streamifier";
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-// ── POST /api/upload ────────────────────────────────────────────────────────
-router.post("/upload", upload.single("file"), async (req, res) => {
+router.post("/upload", requireAuth, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file provided" });
 
@@ -19,52 +20,56 @@ router.post("/upload", upload.single("file"), async (req, res) => {
       return res.status(400).json({ error: `Unsupported file type: .${ext}` });
     }
 
-    const bucketPath = `uploads/${Date.now()}_${originalname}`;
-    const { error: uploadError } = await supabase.storage
-      .from(process.env.SUPABASE_BUCKET)
-      .upload(bucketPath, buffer, { contentType: mimetype });
+    // 1. Upload to Cloudinary
+    const uploadToCloudinary = () => {
+      return new Promise((resolve, reject) => {
+        const publicId = originalname;
+        const targetFolder = `sme-documents/${req.user.org_id}`;
+        const cld_upload_stream = cloudinary.uploader.upload_stream(
+          { resource_type: "raw", folder: targetFolder, use_filename: true, unique_filename: false, public_id: publicId },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        streamifier.createReadStream(buffer).pipe(cld_upload_stream);
+      });
+    };
 
-    if (uploadError)
-      throw new Error(`Bucket upload failed: ${uploadError.message}`);
+    const cloudinaryResult = await uploadToCloudinary();
 
-    const chunkCount = await ingestFromBucket(bucketPath);
+    // 2. Ingest from memory buffer directly for speed (avoid downloading back from Cloudinary)
+    const chunkCount = await ingestFromBuffer(buffer, originalname, cloudinaryResult.secure_url, req.user.org_id);
 
     res.json({
       message: "File uploaded and ingested successfully",
       file: originalname,
-      bucketPath,
+      url: cloudinaryResult.secure_url,
       chunks: chunkCount,
     });
   } catch (err) {
-    console.error("[upload] error:", err.message);
+    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /api/uploads/list ───────────────────────────────────────────────────
-router.get("/uploads/list", async (req, res) => {
+// ── GET /api/uploads/list ──────────────────────────────────────────────────
+router.get("/uploads/list", requireAuth, async (req, res) => {
   try {
-    const { data, error } = await supabase.storage
-      .from(process.env.SUPABASE_BUCKET)
-      .list("uploads", {
-        limit: 100,
-        sortBy: { column: "created_at", order: "desc" },
-      });
+    // Fetch legacy unstructured files AND explicitly the user's isolated org folder
+    const searchResult = await cloudinary.search
+      .expression(`folder:sme-documents OR folder:sme-documents/${req.user.org_id}`)
+      .sort_by('created_at', 'desc')
+      .max_results(100)
+      .execute();
 
-    if (error) throw new Error(error.message);
-
-    const files = (data ?? []).map((f) => {
-      const { data: urlData } = supabase.storage
-        .from(process.env.SUPABASE_BUCKET)
-        .getPublicUrl(`uploads/${f.name}`);
-      return {
-        name: f.name.replace(/^\d+_/, ""),
-        path: `uploads/${f.name}`,
-        size: f.metadata?.size ?? 0,
-        created_at: f.created_at,
-        url: urlData.publicUrl,
-      };
-    });
+    const files = searchResult.resources.map(f => ({
+      name: f.public_id.split('/').pop(),
+      path: f.public_id,
+      size: f.bytes,
+      created_at: f.created_at,
+      url: f.secure_url,
+    }));
 
     res.json({ files });
   } catch (err) {

@@ -1,4 +1,4 @@
-import { StateGraph, END } from "@langchain/langgraph";
+import { StateGraph, END, MemorySaver } from "@langchain/langgraph";
 import { retrieveNode } from "./nodes/retrieveNode.js";
 import { conflictNode } from "./nodes/conflictNode.js";
 import { generateNode } from "./nodes/generateNode.js";
@@ -18,14 +18,23 @@ graph.addEdge("conflict", "generate");
 graph.addEdge("generate", "crm");
 graph.addEdge("crm", END);
 
-export const ragAgent = graph.compile();
+const memory = new MemorySaver();
+export const ragAgent = graph.compile({ checkpointer: memory });
 
-export async function runRagPipeline(question) {
-  const result = await ragAgent.invoke({ question });
+export async function runRagPipeline(question, threadId = "default-thread", orgId = null) {
+  const result = await ragAgent.invoke(
+    { question, org_id: orgId },
+    { configurable: { thread_id: threadId } }
+  );
+  
+  // Save human message and assistant message back to state manually if we don't do it inside nodes:
+  // We'll actually do message appending inside generateNode so we have full control.
+  
   return {
     answer: result.answer,
     sources: result.sources,
     conflicts: result.conflicts,
     timeline: result.timeline ?? [],
+    crmTicket: result.crmTicket ?? null,
   };
 }
